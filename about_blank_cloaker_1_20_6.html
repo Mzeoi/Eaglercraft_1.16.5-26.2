@@ -37,7 +37,10 @@
     iframe.allow = 'fullscreen; autoplay; gamepad';
     w.document.body.appendChild(iframe);
 
-    window.location.replace(REDIRECT_URL);
+    window.close();
+    setTimeout(function () {
+      window.location.replace(REDIRECT_URL);
+    }, 300);
   });
 </script>
 </body>
