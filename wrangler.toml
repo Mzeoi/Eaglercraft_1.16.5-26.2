@@ -1,0 +1,4 @@
+name = "eaglercraft-1-16-5-26-2"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+workers_dev = true
