@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launcher</title>
+</head>
+<body>
+<div id="list">Loading...</div>
+
+<script>
+  // 要扫描的目录（相对当前页面）。想扫根目录就改成 '/'
+  const DIR_URL = './';
+  // 如果服务器没开目录索引，就读这个清单文件：["a.html","b.html"]
+  const MANIFEST_URL = './files.json';
+
+  const REDIRECT_URL = 'https://www.google.com';
+  const FAKE_TITLE = 'Google';
+
+  const self = location.pathname.split('/').pop();
+
+  async function listFromIndex() {
+    const base = new URL(DIR_URL, location.href);
+    const res = await fetch(base.href);
+    if (!res.ok) throw new Error('no index');
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const out = [];
+    doc.querySelectorAll('a[href]').forEach(function (a) {
+      const u = new URL(a.getAttribute('href'), base);
+      const name = decodeURIComponent(u.pathname.split('/').pop());
+      if (u.origin === base.origin && /\.html?$/i.test(name) && name !== self) {
+        out.push({ name: name, url: u.href });
+      }
+    });
+    return out;
+  }
+
+  async function listFromManifest() {
+    const base = new URL(MANIFEST_URL, location.href);
+    const res = await fetch(base.href);
+    if (!res.ok) throw new Error('no manifest');
+    const names = await res.json();
+    return names
+      .filter(function (n) { return n !== self; })
+      .map(function (n) { return { name: n, url: new URL(n, base).href }; });
+  }
+
+  function launch(url) {
+    const w = window.open('about:blank', '_blank');
+    if (!w) return;
+
+    w.document.title = FAKE_TITLE;
+
+    const link = w.document.createElement('link');
+    link.rel = 'icon';
+    link.href = 'https://www.google.com/favicon.ico';
+    w.document.head.appendChild(link);
+
+    // about:blank 里的 iframe 要铺满窗口，这几行样式必须保留
+    const style = w.document.createElement('style');
+    style.textContent =
+      'html,body{margin:0;height:100%;overflow:hidden;}' +
+      'iframe{position:fixed;inset:0;width:100%;height:100%;border:0;}';
+    w.document.head.appendChild(style);
+
+    const iframe = w.document.createElement('iframe');
+    iframe.src = url;
+    iframe.allow = 'fullscreen; autoplay; gamepad';
+    w.document.body.appendChild(iframe);
+
+    window.close();
+    setTimeout(function () {
+      window.location.replace(REDIRECT_URL);
+    }, 300);
+  }
+
+  (async function () {
+    const box = document.getElementById('list');
+    let files = [];
+    try {
+      files = await listFromIndex();
+    } catch (e) {}
+    if (!files.length) {
+      try {
+        files = await listFromManifest();
+      } catch (e) {}
+    }
+
+    box.textContent = '';
+    if (!files.length) {
+      box.textContent = 'No .html files found.';
+      return;
+    }
+
+    files.forEach(function (f) {
+      const btn = document.createElement('button');
+      btn.textContent = 'Launch_' + f.name;
+      btn.addEventListener('click', function () { launch(f.url); });
+      box.appendChild(btn);
+      box.appendChild(document.createElement('br'));
+    });
+  })();
+</script>
+</body>
+</html>
