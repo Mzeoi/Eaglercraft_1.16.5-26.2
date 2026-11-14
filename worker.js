@@ -96,9 +96,52 @@ export default {
     // (otherwise "/dir/" would be sanitized to "/dir" and redirect to itself forever)
     const isDirRequest = rawPath === "" || rawPath.endsWith("/");
 
+    // JSON API: list files of a repo directory through this route
+    // e.g. /__api/list  or  /__api/list?dir=resource_packs
+    if (path === "__api/list") {
+      const dir = sanitizePath(url.searchParams.get("dir") || "");
+      const apiResp = await fetch(
+        "https://api.github.com/repos/" + REPO + "/contents/" + encodePath(dir) + "?ref=" + BRANCH,
+        { headers: { "User-Agent": "cloudflare-worker", "Accept": "application/vnd.github.v3+json" } }
+      );
+      const jsonHeaders = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-store",
+      };
+      if (apiResp.ok) {
+        const data = await apiResp.json();
+        const items = Array.isArray(data)
+          ? data.map((d) => ({ name: d.name, path: d.path, type: d.type, size: d.size }))
+          : [];
+        return new Response(JSON.stringify({ repo: REPO, branch: BRANCH, dir, items }), {
+          status: 200,
+          headers: jsonHeaders,
+        });
+      }
+      return new Response(JSON.stringify({ error: "github_api", status: apiResp.status }), {
+        status: 502,
+        headers: jsonHeaders,
+      });
+    }
+
     // Root or ends with / = directory listing
     if (isDirRequest) {
       const dirPath = path;
+      // Root: serve the site index page from the repo when present
+      if (dirPath === "") {
+        const idx = await fetch("https://raw.githubusercontent.com/" + REPO + "/" + BRANCH + "/index.html");
+        if (idx.ok) {
+          return new Response(idx.body, {
+            status: 200,
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              "Access-Control-Allow-Origin": "*",
+              "Cache-Control": "no-store",
+            },
+          });
+        }
+      }
       const listing = await dirListing(dirPath);
       if (listing) return listing;
 

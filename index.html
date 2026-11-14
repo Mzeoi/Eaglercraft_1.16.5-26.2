@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eaglercraft 版本站</title>
+<script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
+<style>
+  :root {
+    --bg: #0c0e0a;
+    --ink: #e9e6dc;
+    --muted: #9aa08f;
+    --line: #2b3024;
+    --accent: #d8a24a;
+    --row-hover: #171b12;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--ink);
+    background: var(--bg) url("https://picsum.photos/seed/eaglercraft/1600/900") center/cover fixed no-repeat;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 12, 8, 0.93);
+    pointer-events: none;
+  }
+  .wrap {
+    position: relative;
+    max-width: 860px;
+    padding: 64px 28px 80px 56px;
+  }
+  header h1 { font-size: 34px; letter-spacing: 1px; }
+  header h1 .tag { color: var(--accent); }
+  header p { margin-top: 14px; color: var(--muted); font-size: 15px; line-height: 1.9; }
+  .rows { margin-top: 36px; border-top: 1px solid var(--line); }
+  a.row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 12px;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink);
+    text-decoration: none;
+  }
+  a.row:hover { background: var(--row-hover); }
+  a.row > iconify-icon { font-size: 26px; color: var(--accent); flex: none; }
+  .meta { flex: 1; min-width: 0; }
+  .meta .name { display: block; font-size: 17px; font-weight: 600; word-break: break-all; }
+  .meta .desc { display: block; margin-top: 4px; font-size: 13px; color: var(--muted); }
+  .size { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .arrow { flex: none; color: var(--muted); display: flex; }
+  footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
+  .err { display: none; margin-top: 36px; color: var(--accent); font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Eaglercraft <span class="tag">版本站</span></h1>
+    <p>浏览器打开就能玩。<br>不用装客户端。<br>文件实时来自 GitHub。</p>
+  </header>
+  <div class="rows" id="rows"></div>
+  <div class="err" id="err">列表加载失败，刷新试试。</div>
+  <footer>点名字直接跳转 · 数据来自 GitHub 仓库</footer>
+</div>
+<script>
+  const REPO = "Mzeoi/Eaglercraft_1.16.5-26.2";
+  const DESC = {
+    "26.2.html": "最新版本 26.2。",
+    "1.20.6.html": "稳定版 1.20.6。",
+    "1.16.5.html": "经典版 1.16.5。",
+    "load_in_about_blank.html": "绕过拦截用的。",
+  };
+
+  function fmtSize(n) {
+    if (!n) return "";
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+    if (n >= 1024) return (n / 1024).toFixed(1) + " KB";
+    return n + " B";
+  }
+  function iconFor(item) {
+    if (item.type === "dir") return "mdi:folder";
+    if (item.name.endsWith(".html")) return "mdi:minecraft";
+    return "mdi:file-document-outline";
+  }
+  function hrefFor(item) {
+    return "/" + item.path.split("/").map(encodeURIComponent).join("/") + (item.type === "dir" ? "/" : "");
+  }
+
+  async function load() {
+    let data = null;
+    try {
+      const r = await fetch("/__api/list", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) { /* fall back to GitHub API below */ }
+    if (!data) {
+      const r = await fetch("https://api.github.com/repos/" + REPO + "/contents/?ref=main", {
+        headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": "eagler-site" },
+      });
+      if (!r.ok) throw new Error("http " + r.status);
+      const arr = await r.json();
+      data = { items: arr.map((d) => ({ name: d.name, path: d.path, type: d.type, size: d.size })) };
+    }
+    const items = (data.items || []).filter((i) => i.name !== "index.html");
+    const files = items.filter((i) => i.type === "file").sort((a, b) => b.name.localeCompare(a.name));
+    const dirs = items.filter((i) => i.type === "dir").sort((a, b) => a.name.localeCompare(b.name));
+    render(files.concat(dirs));
+  }
+
+  function render(items) {
+    const box = document.getElementById("rows");
+    for (const item of items) {
+      const a = document.createElement("a");
+      a.className = "row";
+      a.href = hrefFor(item);
+
+      const icon = document.createElement("iconify-icon");
+      icon.setAttribute("icon", iconFor(item));
+
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = item.name;
+      const desc = document.createElement("span");
+      desc.className = "desc";
+      desc.textContent = DESC[item.name] || "点开就能玩。";
+      meta.append(name, desc);
+
+      const size = document.createElement("span");
+      size.className = "size";
+      size.textContent = fmtSize(item.size);
+
+      const arrow = document.createElement("span");
+      arrow.className = "arrow";
+      const arrowIcon = document.createElement("iconify-icon");
+      arrowIcon.setAttribute("icon", "mdi:arrow-right");
+      arrow.append(arrowIcon);
+
+      a.append(icon, meta, size, arrow);
+      box.append(a);
+    }
+  }
+
+  load().catch(() => { document.getElementById("err").style.display = "block"; });
+</script>
+</body>
+</html>
