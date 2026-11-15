@@ -9,14 +9,24 @@
 <div id="list">Loading...</div>
 
 <script>
+  const REPO = 'Mzeoi/Eaglercraft_1.16.5-26.2';
+  const BRANCH = 'main';
   const DIR_URL = './';
-  const MANIFEST_URL = './files.json';
+
+  // Backup list, used only if the GitHub API fails. Add new files here.
+  const FILES = ['26.2.html', '1.20.6.html', '1.16.5.html'];
 
   const REDIRECT_URL = 'https://www.google.com';
   const FAKE_TITLE = 'Google';
 
-  const self = location.pathname.split('/').pop();
+  const self = decodeURIComponent(location.pathname.split('/').pop());
+  const HIDDEN = [self, 'index.html'];
 
+  function keep(name) {
+    return /\.html?$/i.test(name) && HIDDEN.indexOf(name) === -1;
+  }
+
+  // 1) Parse a directory index (works on servers that list files).
   async function listFromIndex() {
     const base = new URL(DIR_URL, location.href);
     const res = await fetch(base.href);
@@ -26,21 +36,31 @@
     doc.querySelectorAll('a[href]').forEach(function (a) {
       const u = new URL(a.getAttribute('href'), base);
       const name = decodeURIComponent(u.pathname.split('/').pop());
-      if (u.origin === base.origin && /\.html?$/i.test(name) && name !== self) {
+      if (u.origin === base.origin && keep(name)) {
         out.push({ name: name, url: u.href });
       }
     });
     return out;
   }
 
-  async function listFromManifest() {
-    const base = new URL(MANIFEST_URL, location.href);
-    const res = await fetch(base.href);
-    if (!res.ok) throw new Error('no manifest');
-    const names = await res.json();
-    return names
-      .filter(function (n) { return n !== self; })
-      .map(function (n) { return { name: n, url: new URL(n, base).href }; });
+  // 2) Ask the GitHub API (works on GitHub Pages, rate limited).
+  async function listFromGitHub() {
+    const api = 'https://api.github.com/repos/' + REPO + '/contents/?ref=' + BRANCH;
+    const res = await fetch(api, { headers: { Accept: 'application/vnd.github.v3+json' } });
+    if (!res.ok) throw new Error('api ' + res.status);
+    const arr = await res.json();
+    return arr
+      .filter(function (d) { return d.type === 'file' && keep(d.name); })
+      .map(function (d) {
+        return { name: d.name, url: new URL(encodeURIComponent(d.name), location.href).href };
+      });
+  }
+
+  // 3) Fall back to the list written in this file.
+  async function listFromInline() {
+    return FILES.filter(keep).map(function (n) {
+      return { name: n, url: new URL(encodeURIComponent(n), location.href).href };
+    });
   }
 
   function launch(url) {
@@ -73,14 +93,14 @@
 
   (async function () {
     const box = document.getElementById('list');
+    const sources = [listFromIndex, listFromGitHub, listFromInline];
     let files = [];
-    try {
-      files = await listFromIndex();
-    } catch (e) {}
-    if (!files.length) {
+
+    for (const source of sources) {
       try {
-        files = await listFromManifest();
+        files = await source();
       } catch (e) {}
+      if (files.length) break;
     }
 
     box.textContent = '';
