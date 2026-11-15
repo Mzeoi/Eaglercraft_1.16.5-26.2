@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eaglercraft 1.19.4</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+    color: #ddd;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    overflow: hidden;
+  }
+  #box {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    text-align: center;
+    padding: 24px;
+  }
+  #title { font-size: 20px; font-weight: 600; color: #fff; }
+  #bar {
+    width: min(520px, 80vw);
+    height: 10px;
+    background: #222;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  #fill {
+    width: 0%;
+    height: 100%;
+    background: linear-gradient(90deg, #2f6f3e, #4caf50);
+    transition: width .2s ease;
+  }
+  #status { font-size: 13px; color: #999; min-height: 18px; }
+  #err { color: #ff6b6b; font-size: 13px; max-width: 620px; white-space: pre-wrap; }
+  a { color: #4caf50; }
+  iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+
+<div id="box">
+  <div id="title">Eaglercraft 1.19.4</div>
+  <div id="bar"><div id="fill"></div></div>
+  <div id="status">正在下载…</div>
+  <div id="err"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // 压缩后的游戏文件分块（因 GitHub 单文件 100MB 限制，gzip 后切成多段）
+  var PARTS = [
+    './1.19.4_parts/part_aa',
+    './1.19.4_parts/part_ab',
+    './1.19.4_parts/part_ac',
+    './1.19.4_parts/part_ad'
+  ];
+  // 解压后的完整文件（原始 1.19.4.html）
+  var TARGET = '1.19.4.html';
+
+  var fill = document.getElementById('fill');
+  var status = document.getElementById('status');
+  var errBox = document.getElementById('err');
+  var box = document.getElementById('box');
+
+  function setProgress(pct, text) {
+    fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    if (text) status.textContent = text;
+  }
+
+  function fail(e) {
+    status.textContent = '加载失败';
+    errBox.textContent = (e && e.message ? e.message : String(e)) +
+      '\n\n如果你直接双击打开了本文件，请改用 http(s) 地址访问本页面后再试。';
+  }
+
+  function human(bytes) {
+    var mb = bytes / 1048576;
+    return (mb >= 1 ? mb.toFixed(1) + ' MB' : Math.round(bytes / 1024) + ' KB');
+  }
+
+  // 下载全部分块并拼接成完整的 gzip 流
+  async function downloadParts(onProgress) {
+    var chunks = [];
+    var received = 0;
+    for (var i = 0; i < PARTS.length; i++) {
+      var resp = await fetch(PARTS[i], { cache: 'force-cache' });
+      if (!resp.ok) throw new Error('下载失败 HTTP ' + resp.status + ' (' + PARTS[i] + ')');
+      var reader = resp.body.getReader();
+      for (;;) {
+        var r = await reader.read();
+        if (r.done) break;
+        chunks.push(r.value);
+        received += r.value.length;
+        if (onProgress) onProgress(received);
+      }
+    }
+    return new Blob(chunks, { type: 'application/gzip' });
+  }
+
+  // 用 DecompressionStream 解压 gzip，得到原始 HTML 文本
+  async function decompress(gzBlob) {
+    var stream = gzBlob.stream().pipeThrough(new DecompressionStream('gzip'));
+    var outLen = 0;
+    var outCounter = new TransformStream({
+      transform: function (chunk, controller) {
+        outLen += chunk.length;
+        setProgress(50 + Math.min(45, (outLen / 132000000) * 45), '正在解压… ' + human(outLen));
+        controller.enqueue(chunk);
+      }
+    });
+    return await new Response(stream.pipeThrough(outCounter)).text();
+  }
+
+  async function downloadAndDecompress() {
+    var gz = await downloadParts(function (received) {
+      setProgress((received / 61000000) * 50, '正在下载… ' + human(received));
+    });
+    setProgress(50, '下载完成，开始解压…');
+    var text = await decompress(gz);
+    setProgress(100, '解压完成，正在启动…');
+    return text;
+  }
+
+  function launch(html) {
+    var blob = new Blob([html], { type: 'text/html' });
+    var url = URL.createObjectURL(blob);
+
+    // 优先整页跳转
+    try {
+      window.location.replace(url);
+    } catch (e) { /* ignore */ }
+
+    // 兜底：如果跳转被拦截，用 iframe 铺满窗口
+    setTimeout(function () {
+      if (document.getElementById('gameFrame')) return;
+      box.style.display = 'none';
+      var iframe = document.createElement('iframe');
+      iframe.id = 'gameFrame';
+      iframe.src = url;
+      iframe.allow = 'fullscreen; autoplay; gamepad; cross-origin-isolated';
+      iframe.setAttribute('allowfullscreen', 'true');
+      document.body.appendChild(iframe);
+    }, 1200);
+  }
+
+  (async function () {
+    if (typeof DecompressionStream === 'undefined') {
+      throw new Error('当前浏览器不支持 DecompressionStream，请使用较新的 Chrome / Edge / Firefox / Safari。');
+    }
+    try {
+      var html = await downloadAndDecompress();
+      launch(html);
+    } catch (e) {
+      fail(e);
+    }
+  })();
+})();
+</script>
+</body>
+</html>
