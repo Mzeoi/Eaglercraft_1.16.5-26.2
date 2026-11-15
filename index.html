@@ -122,6 +122,14 @@
 <script>
   const REPO = "Mzeoi/Eaglercraft_1.16.5-26.2";
 
+  const FILTER = {
+    hide: ["index.html, 1.19.4_parts"],
+    hidePatterns: [/^\./, /^_/],
+    showOnly: null,
+    allowExt: [".html"],
+    showDirs: true,
+  };
+
   const DESC = {
     "26.2.html": "Performance may suffer (A LOT!)",
     "1.20.6.html": "May lag in singleplayer, multiplayer is recommended",
@@ -130,6 +138,14 @@
     "launch_about_blank.html": "Loads in about:blank. Bypass url filters like Dyknow",
     "resource_packs": "Fun working resource packs",
   };
+
+  function isVisible(item) {
+    if (FILTER.showOnly) return FILTER.showOnly.includes(item.name);
+    if (FILTER.hide.includes(item.name)) return false;
+    if (FILTER.hidePatterns.some((re) => re.test(item.name))) return false;
+    if (item.type === "dir") return FILTER.showDirs;
+    return FILTER.allowExt.some((ext) => item.name.toLowerCase().endsWith(ext));
+  }
 
   function fmtSize(n) {
     if (!n) return "";
@@ -151,7 +167,7 @@
     try {
       const r = await fetch("/__api/list", { cache: "no-store" });
       if (r.ok) data = await r.json();
-    } catch (e) { /* fall back to GitHub API below */ }
+    } catch (e) {}
     if (!data) {
       const r = await fetch("https://api.github.com/repos/" + REPO + "/contents/?ref=main", {
         headers: { "Accept": "application/vnd.github.v3+json", "User-Agent": "eagler-site" },
@@ -160,7 +176,7 @@
       const arr = await r.json();
       data = { items: arr.map((d) => ({ name: d.name, path: d.path, type: d.type, size: d.size })) };
     }
-    const items = (data.items || []).filter((i) => i.name !== "index.html" && (i.type === "dir" || i.name.endsWith(".html")));
+    const items = (data.items || []).filter(isVisible);
     const files = items.filter((i) => i.type === "file").sort((a, b) => b.name.localeCompare(a.name));
     const dirs = items.filter((i) => i.type === "dir").sort((a, b) => a.name.localeCompare(b.name));
     render(files.concat(dirs));
