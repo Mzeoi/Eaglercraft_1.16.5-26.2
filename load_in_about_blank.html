@@ -9,9 +9,7 @@
 <div id="list">Loading...</div>
 
 <script>
-  // 要扫描的目录（相对当前页面）。想扫根目录就改成 '/'
   const DIR_URL = './';
-  // 如果服务器没开目录索引，就读这个清单文件：["a.html","b.html"]
   const MANIFEST_URL = './files.json';
 
   const REDIRECT_URL = 'https://www.google.com';
@@ -56,7 +54,6 @@
     link.href = 'https://www.google.com/favicon.ico';
     w.document.head.appendChild(link);
 
-    // about:blank 里的 iframe 要铺满窗口，这几行样式必须保留
     const style = w.document.createElement('style');
     style.textContent =
       'html,body{margin:0;height:100%;overflow:hidden;}' +
