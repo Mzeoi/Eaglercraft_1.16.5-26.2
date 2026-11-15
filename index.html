@@ -1,78 +1,133 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Eaglercraft 版本站</title>
+<title>Eaglercraft Versions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@700&family=VT323&display=swap" rel="stylesheet">
 <script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
 <style>
   :root {
-    --bg: #0c0e0a;
-    --ink: #e9e6dc;
-    --muted: #9aa08f;
-    --line: #2b3024;
-    --accent: #d8a24a;
-    --row-hover: #171b12;
+    --night: #15120d;
+    --ink: #efe9d6;
+    --muted: #b9b29d;
+    --grass: #6fae3e;
+    --grass-dark: #3f6b22;
+    --dirt: #6b4a2b;
+    --stone: #4a4945;
+    --stone-hover: #5b5a54;
+    --hi: #8f8e88;
+    --lo: #1c1b19;
+    --gold: #f0c04a;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { image-rendering: pixelated; }
   body {
-    font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-family: "VT323", ui-monospace, "Courier New", monospace;
+    font-size: 20px;
     color: var(--ink);
-    background: var(--bg) url("https://picsum.photos/seed/eaglercraft/1600/900") center/cover fixed no-repeat;
+    background: var(--night) url("https://picsum.photos/seed/eaglercraft/160/90") top left / cover fixed no-repeat;
+    image-rendering: pixelated;
+    min-height: 100vh;
   }
   body::before {
     content: "";
     position: fixed;
     inset: 0;
-    background: rgba(10, 12, 8, 0.93);
+    background: rgba(21, 18, 13, 0.88);
     pointer-events: none;
+  }
+  .grass {
+    position: relative;
+    height: 14px;
+    background: var(--grass);
+    border-bottom: 6px solid var(--dirt);
+    box-shadow: inset 0 -4px 0 var(--grass-dark);
   }
   .wrap {
     position: relative;
-    max-width: 860px;
-    padding: 64px 28px 80px 56px;
+    max-width: 680px;
+    padding: 36px 20px 56px 8vw;
   }
-  header h1 { font-size: 34px; letter-spacing: 1px; }
-  header h1 .tag { color: var(--accent); }
-  header p { margin-top: 14px; color: var(--muted); font-size: 15px; line-height: 1.9; }
-  .rows { margin-top: 36px; border-top: 1px solid var(--line); }
+  h1 {
+    font-family: "Silkscreen", "VT323", monospace;
+    font-size: 30px;
+    line-height: 1.1;
+    letter-spacing: 1px;
+    text-shadow: 3px 3px 0 var(--lo);
+  }
+  h1 .tag { color: var(--grass); }
+  h1 .cursor { color: var(--gold); animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .lead { margin-top: 10px; color: var(--muted); font-size: 22px; line-height: 1.25; }
+
+  .rows { margin-top: 22px; display: flex; flex-direction: column; gap: 6px; }
   a.row {
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 18px 12px;
-    border-bottom: 1px solid var(--line);
+    gap: 12px;
+    padding: 10px 12px;
     color: var(--ink);
     text-decoration: none;
+    background: var(--stone);
+    border: 3px solid;
+    border-color: var(--hi) var(--lo) var(--lo) var(--hi);
   }
-  a.row:hover { background: var(--row-hover); }
-  a.row > iconify-icon { font-size: 26px; color: var(--accent); flex: none; }
+  a.row:hover { background: var(--stone-hover); }
+  a.row:hover .name { color: var(--gold); }
+  a.row:active { border-color: var(--lo) var(--hi) var(--hi) var(--lo); }
+  a.row:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+  .slot {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #2a2926;
+    border: 3px solid;
+    border-color: var(--lo) var(--hi) var(--hi) var(--lo);
+  }
+  .slot iconify-icon { font-size: 24px; color: var(--grass); }
   .meta { flex: 1; min-width: 0; }
-  .meta .name { display: block; font-size: 17px; font-weight: 600; word-break: break-all; }
-  .meta .desc { display: block; margin-top: 4px; font-size: 13px; color: var(--muted); }
-  .size { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .arrow { flex: none; color: var(--muted); display: flex; }
-  footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
-  .err { display: none; margin-top: 36px; color: var(--accent); font-size: 14px; }
+  .name {
+    display: block;
+    font-family: "Silkscreen", "VT323", monospace;
+    font-size: 14px;
+    word-break: break-all;
+    text-shadow: 2px 2px 0 var(--lo);
+  }
+  .desc { display: block; margin-top: 3px; font-size: 20px; line-height: 1.15; color: var(--muted); }
+  .side { flex: none; display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .size { font-size: 18px; }
+  .side iconify-icon { font-size: 18px; }
+
+  footer { margin-top: 20px; color: var(--muted); font-size: 18px; }
+  .err { display: none; margin-top: 22px; padding: 8px 12px; background: #3a1f1a; border: 3px solid #8c3a2c; color: #f0a090; }
 </style>
 </head>
 <body>
+<div class="grass"></div>
 <div class="wrap">
   <header>
-    <h1>Eaglercraft <span class="tag">版本站</span></h1>
-    <p>浏览器打开就能玩。<br>不用装客户端。<br>文件实时来自 GitHub。</p>
+    <h1>Eaglercraft <span class="tag">Versions</span><span class="cursor">_</span></h1>
+    <p class="lead">Unblocked Minecraft in your browser!<br>Credits to Eaglercraft</p>
   </header>
   <div class="rows" id="rows"></div>
-  <div class="err" id="err">列表加载失败，刷新试试。</div>
-  <footer>点名字直接跳转 · 数据来自 GitHub 仓库</footer>
+  <div class="err" id="err">The list broke. Refresh and try again.</div>
+  <footer>Click a file to start Minecrafting</footer>
 </div>
 <script>
   const REPO = "Mzeoi/Eaglercraft_1.16.5-26.2";
+
   const DESC = {
-    "26.2.html": "最新版本 26.2。",
-    "1.20.6.html": "稳定版 1.20.6。",
-    "1.16.5.html": "经典版 1.16.5。",
-    "load_in_about_blank.html": "绕过拦截用的。",
+    "26.2.html": "Latest build. Performance may suffer (A LOT!)",
+    "1.20.6.html": "Stable 1.20.6. May lag in singleplayer, multiplayer is recommended",
+    "1.16.5.html": "Classic 1.16.5. Optimized, works fine on low end PCs",
+    "launch_about_blank.html": "Loads in about:blank. Bypass url filters like Dyknow",
+    "resource_packs": "Fun working resource packs",
   };
 
   function fmtSize(n) {
@@ -82,9 +137,9 @@
     return n + " B";
   }
   function iconFor(item) {
-    if (item.type === "dir") return "mdi:folder";
+    if (item.type === "dir") return "pixelarticons:folder";
     if (item.name.endsWith(".html")) return "mdi:minecraft";
-    return "mdi:file-document-outline";
+    return "pixelarticons:file";
   }
   function hrefFor(item) {
     return "/" + item.path.split("/").map(encodeURIComponent).join("/") + (item.type === "dir" ? "/" : "");
@@ -104,7 +159,7 @@
       const arr = await r.json();
       data = { items: arr.map((d) => ({ name: d.name, path: d.path, type: d.type, size: d.size })) };
     }
-    const items = (data.items || []).filter((i) => i.name !== "index.html");
+    const items = (data.items || []).filter((i) => i.name !== "index.html" && (i.type === "dir" || i.name.endsWith(".html")));
     const files = items.filter((i) => i.type === "file").sort((a, b) => b.name.localeCompare(a.name));
     const dirs = items.filter((i) => i.type === "dir").sort((a, b) => a.name.localeCompare(b.name));
     render(files.concat(dirs));
@@ -117,30 +172,35 @@
       a.className = "row";
       a.href = hrefFor(item);
 
+      const slot = document.createElement("span");
+      slot.className = "slot";
       const icon = document.createElement("iconify-icon");
       icon.setAttribute("icon", iconFor(item));
+      slot.append(icon);
 
       const meta = document.createElement("span");
       meta.className = "meta";
       const name = document.createElement("span");
       name.className = "name";
       name.textContent = item.name;
-      const desc = document.createElement("span");
-      desc.className = "desc";
-      desc.textContent = DESC[item.name] || "点开查看。";
-      meta.append(name, desc);
+      meta.append(name);
+      if (DESC[item.name]) {
+        const desc = document.createElement("span");
+        desc.className = "desc";
+        desc.textContent = DESC[item.name];
+        meta.append(desc);
+      }
 
+      const side = document.createElement("span");
+      side.className = "side";
       const size = document.createElement("span");
       size.className = "size";
       size.textContent = fmtSize(item.size);
-
-      const arrow = document.createElement("span");
-      arrow.className = "arrow";
       const arrowIcon = document.createElement("iconify-icon");
-      arrowIcon.setAttribute("icon", "mdi:arrow-right");
-      arrow.append(arrowIcon);
+      arrowIcon.setAttribute("icon", "pixelarticons:arrow-right");
+      side.append(size, arrowIcon);
 
-      a.append(icon, meta, size, arrow);
+      a.append(slot, meta, side);
       box.append(a);
     }
   }
