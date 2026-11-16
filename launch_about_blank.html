@@ -16,6 +16,23 @@
   // Backup list, used only if the GitHub API fails. Add new files here.
   const FILES = ['26.2.html', '1.20.6.html', '1.16.5.html'];
 
+  // Custom loading: when a file name matches a key, load that url instead.
+  //   url:   the page to load (relative paths are resolved against this launcher)
+  //   mode:  'cloak'  = about:blank window + iframe (the old behavior, default)
+  //          'direct' = open the url as a normal tab (needed for games that
+  //                     require cross-origin isolation / SharedArrayBuffer)
+  //   label: optional text for the button
+  // The key does NOT have to be a real file; it shows up in the list anyway.
+  const CUSTOM = {
+    '26.3.html': {
+      url: './horizon-web-26.3/index.html',
+      mode: 'direct',
+      label: 'Launch 26.3_Horizon.html'
+    }
+    // '1.21.html': { url: './some-folder/index.html' },            // cloak mode
+    // 'other.html': { url: 'https://example.com/game/', mode: 'direct' },
+  };
+
   const REDIRECT_URL = 'https://www.google.com';
   const FAKE_TITLE = 'Google';
 
@@ -63,7 +80,44 @@
     });
   }
 
-  function launch(url) {
+  // Apply CUSTOM: override urls of matching files, and add virtual entries.
+  function applyCustom(files) {
+    const byName = {};
+    files.forEach(function (f) { byName[f.name] = f; });
+
+    Object.keys(CUSTOM).forEach(function (name) {
+      const c = CUSTOM[name];
+      const entry = byName[name] || { name: name };
+      entry.url = new URL(c.url, location.href).href;
+      entry.mode = c.mode || 'cloak';
+      entry.label = c.label || ('Launch_' + name);
+      byName[name] = entry;
+    });
+
+    return Object.keys(byName).map(function (n) {
+      const f = byName[n];
+      f.mode = f.mode || 'cloak';
+      f.label = f.label || ('Launch_' + f.name);
+      return f;
+    });
+  }
+
+  function cleanupAndLeave() {
+    window.close();
+    setTimeout(function () {
+      window.location.replace(REDIRECT_URL);
+    }, 300);
+  }
+
+  // Normal tab, no wrapper. Keeps the page's own headers/isolation intact.
+  function launchDirect(url) {
+    const w = window.open(url, '_blank');
+    if (!w) return;
+    cleanupAndLeave();
+  }
+
+  // about:blank + iframe, with a fake title and icon.
+  function launchCloak(url) {
     const w = window.open('about:blank', '_blank');
     if (!w) return;
 
@@ -82,13 +136,15 @@
 
     const iframe = w.document.createElement('iframe');
     iframe.src = url;
-    iframe.allow = 'fullscreen; autoplay; gamepad';
+    iframe.allow = 'fullscreen; autoplay; gamepad; cross-origin-isolated';
     w.document.body.appendChild(iframe);
 
-    window.close();
-    setTimeout(function () {
-      window.location.replace(REDIRECT_URL);
-    }, 300);
+    cleanupAndLeave();
+  }
+
+  function launch(f) {
+    if (f.mode === 'direct') launchDirect(f.url);
+    else launchCloak(f.url);
   }
 
   (async function () {
@@ -103,6 +159,8 @@
       if (files.length) break;
     }
 
+    files = applyCustom(files);
+
     box.textContent = '';
     if (!files.length) {
       box.textContent = 'No .html files found.';
@@ -111,8 +169,8 @@
 
     files.forEach(function (f) {
       const btn = document.createElement('button');
-      btn.textContent = 'Launch_' + f.name;
-      btn.addEventListener('click', function () { launch(f.url); });
+      btn.textContent = f.label;
+      btn.addEventListener('click', function () { launch(f); });
       box.appendChild(btn);
       box.appendChild(document.createElement('br'));
     });
