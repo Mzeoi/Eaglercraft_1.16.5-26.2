@@ -5,22 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Minecraft 26.3 (Horizon web)</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  #game { display: block; width: 100vw; height: 100vh; border: 0; }
-  #fallback {
-    position: fixed; left: 0; right: 0; bottom: 8px; text-align: center;
-    color: #888; font: 13px system-ui, sans-serif; pointer-events: none;
-  }
-  #fallback a { color: #6cf; pointer-events: auto; }
+  html, body { margin: 0; height: 100%; background: #000; color: #888;
+    font: 14px system-ui, sans-serif; display: flex;
+    align-items: center; justify-content: center; }
+  a { color: #6cf; }
 </style>
 </head>
 <body>
-<!-- Horizon web build (Minecraft 26.3, Rust/WASM/WebGPU). Needs a WebGPU browser
-     (Chrome/Edge); on Linux Chromium add --enable-unsafe-webgpu --enable-features=Vulkan.
-     The game's service worker adds the cross-origin isolation headers on first visit
-     and reloads once automatically. -->
-<iframe id="game" src="horizon-web-26.3/index.html"
-        allow="fullscreen; pointer-lock; gamepad; clipboard-read; clipboard-write; autoplay"></iframe>
-<div id="fallback">If the game did not load, <a href="horizon-web-26.3/index.html" target="_blank">open it directly</a>.</div>
+<p>Redirecting… Stuck? <a id="link" href="#"> Click here</a>。</p>
+<script>
+  const url = "https://github.com/Mzeoi/Eaglercraft_1.16.5-26.2/tree/main/horizon-web-26.3/index.html";
+  document.getElementById("link").href = url;
+  location.replace(url);
+</script>
 </body>
 </html>
