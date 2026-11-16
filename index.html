@@ -63,8 +63,9 @@
   @keyframes blink { 50% { opacity: 0; } }
   .lead { margin-top: 10px; color: var(--muted); font-size: 22px; line-height: 1.25; }
 
-  .rows { margin-top: 22px; display: flex; flex-direction: column; gap: 6px; }
+  .rows { margin-top: 26px; display: flex; flex-direction: column; gap: 12px; }
   a.row {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -79,6 +80,20 @@
   a.row:hover .name { color: var(--gold); }
   a.row:active { border-color: var(--lo) var(--hi) var(--hi) var(--lo); }
   a.row:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+  .badge {
+    position: absolute;
+    top: -9px;
+    right: 10px;
+    padding: 2px 6px;
+    font-family: "Silkscreen", "VT323", monospace;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--night);
+    background: var(--gold);
+    border: 3px solid;
+    border-color: #ffe08a #9a7414 #9a7414 #ffe08a;
+  }
   .slot {
     flex: none;
     width: 40px;
@@ -135,10 +150,13 @@
     "1.20.6.html": "May lag in singleplayer, multiplayer is recommended",
     "1.16.5.html": "Optimized, works fine on low end PCs",
     "1.19.4.html": "Caves & Cliffs full updated, multiplayer is recommended",
-    "26.3_horizon.html": "Minecraft rust webport, might get better performance",
+    "26.3_horizon.html": "Fabulously optimized by nobuildersnotools team, straight 60 FPS on a chromebook",
     "launch_about_blank.html": "Loads in about:blank. Bypass url filters like Dyknow",
     "resource_packs": "Fun working resource packs",
   };
+
+  // Files that get the gold "Recommended" tag (names must match exactly)
+  const RECOMMENDED = ["26.3_horizon.html"];
 
   function isVisible(item) {
     if (FILTER.showOnly) return FILTER.showOnly.includes(item.name);
@@ -219,11 +237,20 @@
       side.append(size, arrowIcon);
 
       a.append(slot, meta, side);
+
+      if (RECOMMENDED.includes(item.name)) {
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = "Recommended";
+        a.append(badge);
+      }
+
       box.append(a);
     }
   }
 
   load().catch(() => { document.getElementById("err").style.display = "block"; });
 </script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"1ec7fc243a6e40a1921ab3dff2165eef","r":1,"spa":2}' crossorigin="anonymous"></script>
 </body>
 </html>
