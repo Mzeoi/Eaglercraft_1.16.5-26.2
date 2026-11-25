@@ -151,12 +151,13 @@
     "1.16.5.html": "Optimized, works fine on low end PCs",
     "1.19.4.html": "Caves & Cliffs full updated, multiplayer is recommended",
     "26.3_horizon.html": "Fabulously optimized by nobuildersnotools team, straight 60 FPS on a chromebook",
+    "26.3_horizon_modded.html": "Minimap & Worldmap bundled 26.3 client",
     "launch_about_blank.html": "Loads in about:blank. Bypass url filters like Dyknow",
     "resource_packs": "Fun working resource packs",
   };
 
   // Files that get the gold "Recommended" tag (names must match exactly)
-  const RECOMMENDED = ["26.3_horizon.html"];
+  const RECOMMENDED = ["26.3_horizon.html", "26.3_horizon_modded.html"];
 
   function isVisible(item) {
     if (FILTER.showOnly) return FILTER.showOnly.includes(item.name);
