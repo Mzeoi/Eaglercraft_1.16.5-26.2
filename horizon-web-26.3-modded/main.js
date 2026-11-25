@@ -258,6 +258,17 @@ async function main() {
     // Let the status paint before the game blocks the page while it loads.
     await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
     status.textContent = "";
+    // Install mod loader toggle state before starting Horizon.
+    const modCfg = JSON.stringify({
+        minimap: localStorage.getItem("horizon.mod.xaerominimap") !== "false",
+        worldmap: localStorage.getItem("horizon.mod.xaeroworldmap") !== "false",
+    });
+    glue.horizon_install_saved_file(
+        "config/xaero/mods_enabled.json",
+        new TextEncoder().encode(modCfg),
+        Date.now(),
+    );
+
     // The game's command-line arguments, from the address: ?args=--world%20T
     const args = (new URLSearchParams(location.search).get("args") ?? "").split(" ").filter(Boolean);
     try {
@@ -277,3 +288,35 @@ main().catch((e) => {
         "Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp.";
     status.textContent = `Horizon could not start:\n${e}${isolation}`;
 });
+
+function initModsPanel() {
+    const toggleBtn = document.getElementById("mods-toggle");
+    const panel = document.getElementById("mods-panel");
+    const cbMinimap = document.getElementById("mod-xaerominimap");
+    const cbWorldmap = document.getElementById("mod-xaeroworldmap");
+    const note = document.getElementById("mods-note");
+    const reloadBtn = document.getElementById("mods-reload");
+    if (!toggleBtn || !panel || !cbMinimap || !cbWorldmap) return;
+
+    cbMinimap.checked = localStorage.getItem("horizon.mod.xaerominimap") !== "false";
+    cbWorldmap.checked = localStorage.getItem("horizon.mod.xaeroworldmap") !== "false";
+
+    toggleBtn.addEventListener("click", () => {
+        panel.classList.toggle("open");
+    });
+
+    const onToggle = () => {
+        localStorage.setItem("horizon.mod.xaerominimap", String(cbMinimap.checked));
+        localStorage.setItem("horizon.mod.xaeroworldmap", String(cbWorldmap.checked));
+        if (note) note.style.display = "block";
+        if (reloadBtn) reloadBtn.style.display = "block";
+    };
+
+    cbMinimap.addEventListener("change", onToggle);
+    cbWorldmap.addEventListener("change", onToggle);
+    if (reloadBtn) {
+        reloadBtn.addEventListener("click", () => location.reload());
+    }
+}
+
+initModsPanel();

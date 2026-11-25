@@ -13,10 +13,39 @@
     pointer-events: none; white-space: pre-line;
   }
   #status:empty { display: none; }
+  #mods-ui {
+    position: fixed; top: 8px; right: 8px; z-index: 20;
+    font: 12px/1.4 system-ui, sans-serif; color: #e6e6e6;
+  }
+  #mods-toggle {
+    background: rgba(20, 24, 32, 0.8); color: #e6e6e6;
+    border: 1px solid #444c5c; padding: 4px 10px; cursor: pointer;
+  }
+  #mods-panel {
+    display: none; margin-top: 4px; padding: 8px 10px; width: 220px;
+    background: rgba(18, 22, 30, 0.92); border: 1px solid #444c5c;
+  }
+  #mods-panel.open { display: block; }
+  #mods-panel label { display: block; margin: 4px 0; cursor: pointer; }
+  #mods-note { display: none; margin-top: 6px; color: #f6c453; }
+  #mods-reload {
+    display: none; margin-top: 4px; width: 100%; padding: 4px;
+    background: #2f5e40; color: #fff; border: 1px solid #4d8a63; cursor: pointer;
+  }
 </style>
 </head>
 <body>
 <div id="status">Starting…</div>
+<div id="mods-ui">
+  <button id="mods-toggle" type="button">Mods</button>
+  <div id="mods-panel">
+    <div><strong>Loaded Mods</strong></div>
+    <label><input type="checkbox" id="mod-xaerominimap"> Xaero's Minimap (26.6.2)</label>
+    <label><input type="checkbox" id="mod-xaeroworldmap"> Xaero's World Map (1.47.2)</label>
+    <div id="mods-note">Reload page to apply changes.</div>
+    <button id="mods-reload" type="button">Reload</button>
+  </div>
+</div>
 <script type="module" src="main.js"></script>
 </body>
 </html>
