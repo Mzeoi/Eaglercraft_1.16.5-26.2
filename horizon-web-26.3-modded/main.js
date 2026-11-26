@@ -251,9 +251,400 @@ async function served() {
     return { glue, tar: new Uint8Array(await tar), manifest: await manifest, base: "fs/res/" };
 }
 
+// ---- File System Access API local persistent storage (horizon-26-3-save) ----
+const SAVE_DIR_NAME = "horizon-26-3-save";
+const WEB_CFG_FILE = "_horizon_web_config.json";
+const FS_LINK_DB = "horizon-fs-link";
+const FS_LINK_STORE = "handles";
+const FS_LINK_KEY = "dirHandle";
+
+let linkedDir = null;
+let syncTimerId = null;
+let activeGlue = null;
+let activeRoot = null;
+let externalSyncing = null;
+
+function getSyncSeconds() {
+    const raw = Number(localStorage.getItem("horizon.fs.syncSec"));
+    return Number.isFinite(raw) && raw >= 5 ? Math.round(raw) : 30;
+}
+
+function fsLinkOpen() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(FS_LINK_DB, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(FS_LINK_STORE);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+async function saveLinkedDirHandle(handle) {
+    const db = await fsLinkOpen();
+    const tx = db.transaction(FS_LINK_STORE, "readwrite");
+    tx.objectStore(FS_LINK_STORE).put(handle, FS_LINK_KEY);
+    await new Promise((res, rej) => {
+        tx.oncomplete = res;
+        tx.onerror = tx.onabort = () => rej(tx.error);
+    });
+}
+
+async function loadLinkedDirHandle() {
+    try {
+        const db = await fsLinkOpen();
+        const tx = db.transaction(FS_LINK_STORE, "readonly");
+        return (await idbRequest(tx.objectStore(FS_LINK_STORE).get(FS_LINK_KEY))) || null;
+    } catch {
+        return null;
+    }
+}
+
+async function clearLinkedDirHandle() {
+    try {
+        const db = await fsLinkOpen();
+        const tx = db.transaction(FS_LINK_STORE, "readwrite");
+        tx.objectStore(FS_LINK_STORE).delete(FS_LINK_KEY);
+        await new Promise((res, rej) => {
+            tx.oncomplete = res;
+            tx.onerror = tx.onabort = () => rej(tx.error);
+        });
+    } catch {
+        // ignore
+    }
+}
+
+async function hasExistingSave(dirHandle) {
+    try {
+        const sub = await dirHandle.getDirectoryHandle(SAVE_DIR_NAME, { create: false });
+        for await (const _ of sub.entries()) {
+            return true;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+async function getSaveSubdir(dirHandle, create = true) {
+    return dirHandle.getDirectoryHandle(SAVE_DIR_NAME, { create });
+}
+
+function collectWebConfig() {
+    return {
+        minimap: localStorage.getItem("horizon.mod.xaerominimap") !== "false",
+        worldmap: localStorage.getItem("horizon.mod.xaeroworldmap") !== "false",
+        syncSec: getSyncSeconds(),
+    };
+}
+
+function applyWebConfig(cfg) {
+    if (!cfg || typeof cfg !== "object") return;
+    if (typeof cfg.minimap === "boolean") {
+        localStorage.setItem("horizon.mod.xaerominimap", String(cfg.minimap));
+    }
+    if (typeof cfg.worldmap === "boolean") {
+        localStorage.setItem("horizon.mod.xaeroworldmap", String(cfg.worldmap));
+    }
+    if (typeof cfg.syncSec === "number" && cfg.syncSec >= 5) {
+        localStorage.setItem("horizon.fs.syncSec", String(Math.round(cfg.syncSec)));
+    }
+    const cbMinimap = document.getElementById("mod-xaerominimap");
+    const cbWorldmap = document.getElementById("mod-xaeroworldmap");
+    const syncInput = document.getElementById("file-sync-time");
+    if (cbMinimap) cbMinimap.checked = localStorage.getItem("horizon.mod.xaerominimap") !== "false";
+    if (cbWorldmap) cbWorldmap.checked = localStorage.getItem("horizon.mod.xaeroworldmap") !== "false";
+    if (syncInput) syncInput.value = String(getSyncSeconds());
+}
+
+async function importFromExternalDir(extDir, root, glue, prefix = "") {
+    let count = 0;
+    for await (const [name, handle] of extDir.entries()) {
+        const rel = prefix ? `${prefix}/${name}` : name;
+        if (handle.kind === "directory") {
+            if (root) await apply(root, rel, "dir", null);
+            if (glue) glue.horizon_install_saved_dir(rel);
+            count += await importFromExternalDir(handle, root, glue, rel);
+        } else {
+            const file = await handle.getFile();
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            if (rel === WEB_CFG_FILE) {
+                try {
+                    applyWebConfig(JSON.parse(new TextDecoder().decode(bytes)));
+                } catch {
+                    // ignore malformed config
+                }
+                continue;
+            }
+            if (root) await apply(root, rel, "file", bytes);
+            if (glue) glue.horizon_install_saved_file(rel, bytes, file.lastModified);
+            count += 1;
+        }
+    }
+    return count;
+}
+
+async function exportOpfsToExternal(srcDir, dstDir) {
+    for await (const [name, handle] of srcDir.entries()) {
+        if (handle.kind === "directory") {
+            const subDst = await dstDir.getDirectoryHandle(name, { create: true });
+            await exportOpfsToExternal(handle, subDst);
+        } else {
+            const file = await handle.getFile();
+            const fh = await dstDir.getFileHandle(name, { create: true });
+            const writable = await fh.createWritable();
+            await writable.write(await file.arrayBuffer());
+            await writable.close();
+        }
+    }
+}
+
+async function exportIdbToExternal(db, dstDir) {
+    const store = db.transaction("files", "readonly").objectStore("files");
+    const [paths, records] = await Promise.all([idbRequest(store.getAllKeys()), idbRequest(store.getAll())]);
+    for (let i = 0; i < paths.length; i++) {
+        const path = paths[i];
+        const rec = records[i];
+        await apply(dstDir, path, rec.data ? "file" : "dir", rec.data);
+    }
+}
+
+async function syncToExternal(root, dirHandle) {
+    if (!dirHandle) return;
+    if (externalSyncing) return externalSyncing;
+    externalSyncing = (async () => {
+        const perm = await dirHandle.queryPermission({ mode: "readwrite" });
+        if (perm !== "granted") return;
+        const extSave = await getSaveSubdir(dirHandle, true);
+        const cfgBytes = new TextEncoder().encode(JSON.stringify(collectWebConfig(), null, 2));
+        await apply(extSave, WEB_CFG_FILE, "file", cfgBytes);
+        if (root instanceof IDBDatabase) {
+            await exportIdbToExternal(root, extSave);
+        } else if (root) {
+            await exportOpfsToExternal(root, extSave);
+        }
+        // Also export IndexedDB "horizon" if it exists alongside OPFS.
+        if (!(root instanceof IDBDatabase)) {
+            try {
+                const db = await idbOpen();
+                await exportIdbToExternal(db, extSave);
+            } catch {
+                // ignore if no idb
+            }
+        }
+    })().finally(() => {
+        externalSyncing = null;
+    });
+    return externalSyncing;
+}
+
+function updateFilePanelUi(statusText) {
+    const pathEl = document.getElementById("file-path");
+    const syncInput = document.getElementById("file-sync-time");
+    const statusEl = document.getElementById("file-status");
+    const disconnectBtn = document.getElementById("file-disconnect");
+    const syncNowBtn = document.getElementById("file-sync-now");
+    if (pathEl) {
+        pathEl.textContent = linkedDir ? `${linkedDir.name}/${SAVE_DIR_NAME}` : "Not connected";
+    }
+    if (syncInput && document.activeElement !== syncInput) {
+        syncInput.value = String(getSyncSeconds());
+    }
+    if (statusEl && statusText !== undefined) {
+        statusEl.textContent = statusText;
+    }
+    if (disconnectBtn) disconnectBtn.disabled = !linkedDir;
+    if (syncNowBtn) syncNowBtn.disabled = !linkedDir;
+}
+
+function restartExternalSyncTimer() {
+    if (syncTimerId !== null) {
+        clearInterval(syncTimerId);
+        syncTimerId = null;
+    }
+    if (!linkedDir || !activeRoot) return;
+    const ms = getSyncSeconds() * 1000;
+    syncTimerId = setInterval(async () => {
+        if (!linkedDir || !activeRoot) return;
+        try {
+            if (activeGlue) await saveChanges(activeGlue, activeRoot);
+            await syncToExternal(activeRoot, linkedDir);
+            const now = new Date().toLocaleTimeString();
+            updateFilePanelUi(`Synced (${now})`);
+        } catch (e) {
+            console.warn("Horizon: periodic external sync failed:", e);
+        }
+    }, ms);
+}
+
+const FILE_API_FAIL_MSG = "Your browser does not support the File System Access API, or you did not grant file access.";
+
+function isNotFoundError(e) {
+    return e?.name === "NotFoundError" || String(e?.message || e).includes("could not be found");
+}
+
+function isFileApiError(e) {
+    return e?.name === "NotAllowedError" || e?.name === "SecurityError";
+}
+
+function setMsg(el, text, isError = false) {
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = isError ? "#f87171" : "";
+}
+
+async function connectFolderFlow(root, glue, msgEl, reloadOnImport = false) {
+    if (!window.showDirectoryPicker) {
+        setMsg(msgEl, FILE_API_FAIL_MSG, true);
+        updateFilePanelUi(FILE_API_FAIL_MSG);
+        return false;
+    }
+    const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+    const perm = await handle.requestPermission({ mode: "readwrite" });
+    if (perm !== "granted") {
+        setMsg(msgEl, FILE_API_FAIL_MSG, true);
+        updateFilePanelUi(FILE_API_FAIL_MSG);
+        return false;
+    }
+    const existed = await hasExistingSave(handle);
+    linkedDir = handle;
+    await saveLinkedDirHandle(handle);
+    if (existed) {
+        const extSave = await getSaveSubdir(handle, false);
+        await importFromExternalDir(extSave, root, glue);
+        updateFilePanelUi("Loaded successfully");
+        restartExternalSyncTimer();
+        if (reloadOnImport) {
+            setMsg(msgEl, "Loaded successfully — reloading…", false);
+            setTimeout(() => location.reload(), 600);
+            return "reloaded";
+        }
+        setMsg(msgEl, "Loaded successfully", false);
+    } else {
+        await syncToExternal(root, handle);
+        setMsg(msgEl, "Configured successfully", false);
+        updateFilePanelUi("Configured successfully");
+        restartExternalSyncTimer();
+    }
+    return true;
+}
+
+function promptFirstVisitOverlay(root, restoredHandle, initialMsg = "") {
+    const overlay = document.getElementById("fs-overlay");
+    const msgEl = document.getElementById("fs-overlay-msg");
+    const btnConnect = document.getElementById("fs-overlay-connect");
+    const btnLater = document.getElementById("fs-overlay-later");
+    const btnNever = document.getElementById("fs-overlay-never");
+    if (!overlay || !btnConnect || !btnLater || !btnNever) return Promise.resolve();
+
+    let currentRestored = restoredHandle;
+    btnConnect.textContent = currentRestored ? `Reconnect (${currentRestored.name})` : "Connect Local Folder";
+    setMsg(msgEl, initialMsg, Boolean(initialMsg));
+    overlay.classList.add("open");
+
+    return new Promise((resolve) => {
+        const done = () => {
+            overlay.classList.remove("open");
+            resolve();
+        };
+        btnConnect.onclick = async () => {
+            try {
+                if (currentRestored) {
+                    const perm = await currentRestored.requestPermission({ mode: "readwrite" });
+                    if (perm !== "granted") {
+                        setMsg(msgEl, FILE_API_FAIL_MSG, true);
+                        updateFilePanelUi(FILE_API_FAIL_MSG);
+                        return;
+                    }
+                    linkedDir = currentRestored;
+                    const existed = await hasExistingSave(currentRestored);
+                    if (existed) {
+                        const extSave = await getSaveSubdir(currentRestored, false);
+                        await importFromExternalDir(extSave, root, null);
+                        setMsg(msgEl, "Loaded successfully — reloading…", false);
+                        updateFilePanelUi("Loaded successfully");
+                        restartExternalSyncTimer();
+                        setTimeout(() => location.reload(), 600);
+                        return;
+                    } else {
+                        await syncToExternal(root, currentRestored);
+                        setMsg(msgEl, "Configured successfully", false);
+                        updateFilePanelUi("Configured successfully");
+                    }
+                    restartExternalSyncTimer();
+                    setTimeout(done, 700);
+                    return;
+                }
+                const ok = await connectFolderFlow(root, null, msgEl, true);
+                if (ok === "reloaded") return;
+                if (ok) setTimeout(done, 700);
+            } catch (e) {
+                if (e.name === "AbortError") return;
+                if (currentRestored && isNotFoundError(e)) {
+                    currentRestored = null;
+                    linkedDir = null;
+                    await clearLinkedDirHandle();
+                    btnConnect.textContent = "Connect";
+                    setMsg(msgEl, "Saved folder could not be found. Click Connect to choose a folder.", true);
+                    updateFilePanelUi("Saved folder not found");
+                } else if (isFileApiError(e) || !window.showDirectoryPicker) {
+                    setMsg(msgEl, FILE_API_FAIL_MSG, true);
+                    updateFilePanelUi(FILE_API_FAIL_MSG);
+                } else {
+                    setMsg(msgEl, `Connection failed: ${e.message || e}`, true);
+                    updateFilePanelUi(`Connection failed: ${e.message || e}`);
+                }
+            }
+        };
+        btnLater.onclick = () => done();
+        btnNever.onclick = () => {
+            localStorage.setItem("horizon.fs.dontShow", "true");
+            done();
+        };
+    });
+}
+
+async function prepareExternalStorage(root) {
+    activeRoot = root;
+    const savedHandle = await loadLinkedDirHandle();
+    if (savedHandle) {
+        const perm = await savedHandle.queryPermission({ mode: "readwrite" }).catch(() => "prompt");
+        if (perm === "granted") {
+            try {
+                linkedDir = savedHandle;
+                if (await hasExistingSave(savedHandle)) {
+                    const extSave = await getSaveSubdir(savedHandle, false);
+                    await importFromExternalDir(extSave, root, null);
+                    updateFilePanelUi("Loaded successfully");
+                } else {
+                    await syncToExternal(root, savedHandle);
+                    updateFilePanelUi("Configured successfully");
+                }
+                restartExternalSyncTimer();
+                return null;
+            } catch (e) {
+                if (isNotFoundError(e)) {
+                    linkedDir = null;
+                    await clearLinkedDirHandle();
+                } else {
+                    throw e;
+                }
+            }
+        }
+        if (localStorage.getItem("horizon.fs.dontShow") !== "true") {
+            updateFilePanelUi();
+            return { needsPrompt: true, restoredHandle: linkedDir ? savedHandle : (perm === "prompt" ? savedHandle : null) };
+        }
+    } else if (localStorage.getItem("horizon.fs.dontShow") !== "true") {
+        updateFilePanelUi();
+        return { needsPrompt: true, restoredHandle: null };
+    }
+    updateFilePanelUi();
+    return null;
+}
+
 async function main() {
     if (!(await webgpu())) return;
     const { glue, tar, manifest, base } = await served();
+    activeGlue = glue;
     status.textContent = "Installing resources…";
     const t0 = performance.now();
     const installed = glue.horizon_install_tar(ROOT, tar);
@@ -261,15 +652,22 @@ async function main() {
     console.log(`Horizon: ${installed} files installed in ${Math.round(performance.now() - t0)} ms`);
 
     const root = await savedRoot();
+    let pendingPrompt = null;
     if (root) {
+        pendingPrompt = await prepareExternalStorage(root);
         const t1 = performance.now();
         const saved = await loadSaved(glue, root, "");
         console.log(`Horizon: ${saved} saved files loaded in ${Math.round(performance.now() - t1)} ms`);
         setInterval(() => saveChanges(glue, root), 2000);
         document.addEventListener("visibilitychange", () => {
-            if (document.hidden) saveChanges(glue, root);
+            if (document.hidden) {
+                saveChanges(glue, root).then(() => syncToExternal(root, linkedDir));
+            }
         });
-        addEventListener("pagehide", () => saveChanges(glue, root));
+        addEventListener("pagehide", () => {
+            saveChanges(glue, root);
+            syncToExternal(root, linkedDir);
+        });
     }
 
     status.textContent = "Loading resources…";
@@ -294,6 +692,9 @@ async function main() {
         // winit leaves Rust's stack by throwing once its event loop is set up.
         if (!String(e).includes("Using exceptions for control flow")) throw e;
     }
+    if (root && pendingPrompt?.needsPrompt) {
+        promptFirstVisitOverlay(root, pendingPrompt.restoredHandle);
+    }
 }
 
 main().catch((e) => {
@@ -310,6 +711,8 @@ main().catch((e) => {
 function initModsPanel() {
     const toggleBtn = document.getElementById("mods-toggle");
     const panel = document.getElementById("mods-panel");
+    const fileToggle = document.getElementById("file-toggle");
+    const filePanel = document.getElementById("file-panel");
     const cbMinimap = document.getElementById("mod-xaerominimap");
     const cbWorldmap = document.getElementById("mod-xaeroworldmap");
     const note = document.getElementById("mods-note");
@@ -320,7 +723,9 @@ function initModsPanel() {
     cbWorldmap.checked = localStorage.getItem("horizon.mod.xaeroworldmap") !== "false";
 
     toggleBtn.addEventListener("click", () => {
-        panel.classList.toggle("open");
+        const open = panel.classList.toggle("open");
+        if (fileToggle) fileToggle.style.display = open ? "none" : "";
+        if (open && filePanel) filePanel.classList.remove("open");
     });
 
     const onToggle = () => {
@@ -337,4 +742,85 @@ function initModsPanel() {
     }
 }
 
+function initFilePanel() {
+    const toggleBtn = document.getElementById("file-toggle");
+    const panel = document.getElementById("file-panel");
+    const modsPanel = document.getElementById("mods-panel");
+    const syncInput = document.getElementById("file-sync-time");
+    const connectBtn = document.getElementById("file-connect");
+    const syncNowBtn = document.getElementById("file-sync-now");
+    const disconnectBtn = document.getElementById("file-disconnect");
+    const statusEl = document.getElementById("file-status");
+    if (!toggleBtn || !panel) return;
+
+    if (syncInput) syncInput.value = String(getSyncSeconds());
+    updateFilePanelUi();
+
+    toggleBtn.addEventListener("click", () => {
+        const open = panel.classList.toggle("open");
+        if (open && modsPanel) modsPanel.classList.remove("open");
+    });
+
+    if (syncInput) {
+        syncInput.addEventListener("change", () => {
+            const val = Math.max(5, Math.round(Number(syncInput.value) || 30));
+            syncInput.value = String(val);
+            localStorage.setItem("horizon.fs.syncSec", String(val));
+            restartExternalSyncTimer();
+            updateFilePanelUi(`Sync interval set to ${val}s`);
+        });
+    }
+
+    if (connectBtn) {
+        connectBtn.addEventListener("click", async () => {
+            try {
+                const root = activeRoot || (await savedRoot());
+                if (!root) {
+                    updateFilePanelUi("Browser storage unavailable.");
+                    return;
+                }
+                activeRoot = root;
+                const ok = await connectFolderFlow(root, activeGlue, statusEl);
+                if (!ok && (!window.showDirectoryPicker || statusEl?.textContent === FILE_API_FAIL_MSG)) {
+                    promptFirstVisitOverlay(root, null, FILE_API_FAIL_MSG);
+                }
+            } catch (e) {
+                if (e.name === "AbortError") return;
+                if (isFileApiError(e) || !window.showDirectoryPicker) {
+                    updateFilePanelUi(FILE_API_FAIL_MSG);
+                    promptFirstVisitOverlay(activeRoot, null, FILE_API_FAIL_MSG);
+                } else {
+                    updateFilePanelUi(`Connection failed: ${e.message || e}`);
+                }
+            }
+        });
+    }
+
+    if (syncNowBtn) {
+        syncNowBtn.addEventListener("click", async () => {
+            if (!linkedDir || !activeRoot) return;
+            try {
+                if (activeGlue) await saveChanges(activeGlue, activeRoot);
+                await syncToExternal(activeRoot, linkedDir);
+                updateFilePanelUi(`Synced (${new Date().toLocaleTimeString()})`);
+            } catch (e) {
+                updateFilePanelUi(`Sync failed: ${e.message || e}`);
+            }
+        });
+    }
+
+    if (disconnectBtn) {
+        disconnectBtn.addEventListener("click", async () => {
+            linkedDir = null;
+            if (syncTimerId !== null) {
+                clearInterval(syncTimerId);
+                syncTimerId = null;
+            }
+            await clearLinkedDirHandle();
+            updateFilePanelUi("Disconnected");
+        });
+    }
+}
+
 initModsPanel();
+initFilePanel();
