@@ -216,6 +216,7 @@ let saving = null;
 function saveChanges(glue, root) {
     saving ??= (async () => {
         for (const [path, kind, data] of glue.horizon_take_changes()) {
+            recordDirtyExternal(path, kind);
             try {
                 await apply(root, path, kind, data);
             } catch (e) {
@@ -254,6 +255,8 @@ async function served() {
 // ---- File System Access API local persistent storage (horizon-26-3-save) ----
 const SAVE_DIR_NAME = "horizon-26-3-save";
 const WEB_CFG_FILE = "_horizon_web_config.json";
+const TOMBSTONE_FILE = "_horizon_tombstones.json";
+const TOMBSTONE_LS_KEY = "horizon.fs.tombstones";
 const FS_LINK_DB = "horizon-fs-link";
 const FS_LINK_STORE = "handles";
 const FS_LINK_KEY = "dirHandle";
@@ -263,6 +266,72 @@ let syncTimerId = null;
 let activeGlue = null;
 let activeRoot = null;
 let externalSyncing = null;
+let forceFullExternalSync = false;
+let configDirty = true;
+let tombstonesDirty = false;
+const dirtyExternalOps = new Map();
+const tombstones = loadLocalTombstones();
+
+function normRelPath(path) {
+    return String(path || "").split("/").filter(Boolean).join("/");
+}
+
+function loadLocalTombstones() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(TOMBSTONE_LS_KEY) || "[]");
+        return new Set(Array.isArray(raw) ? raw.map(normRelPath).filter(Boolean) : []);
+    } catch {
+        return new Set();
+    }
+}
+
+function saveLocalTombstones() {
+    try {
+        localStorage.setItem(TOMBSTONE_LS_KEY, JSON.stringify([...tombstones]));
+    } catch {
+        // ignore
+    }
+}
+
+function isTombstoned(rel) {
+    const norm = normRelPath(rel);
+    if (!norm) return false;
+    if (tombstones.has(norm)) return true;
+    const parts = norm.split("/");
+    for (let i = 1; i < parts.length; i++) {
+        if (tombstones.has(parts.slice(0, i).join("/"))) return true;
+    }
+    return false;
+}
+
+function recordDirtyExternal(path, kind) {
+    const rel = normRelPath(path);
+    if (!rel) return;
+    if (kind === "gone" || kind === "cleardir") {
+        for (const k of [...dirtyExternalOps.keys()]) {
+            if (k === rel || k.startsWith(`${rel}/`)) dirtyExternalOps.delete(k);
+        }
+        for (const t of [...tombstones]) {
+            if (t.startsWith(`${rel}/`)) tombstones.delete(t);
+        }
+        tombstones.add(rel);
+        tombstonesDirty = true;
+        saveLocalTombstones();
+        dirtyExternalOps.set(rel, kind);
+    } else {
+        const parts = rel.split("/");
+        let changed = false;
+        for (let i = 1; i <= parts.length; i++) {
+            const prefix = parts.slice(0, i).join("/");
+            if (tombstones.delete(prefix)) changed = true;
+        }
+        if (changed) {
+            tombstonesDirty = true;
+            saveLocalTombstones();
+        }
+        dirtyExternalOps.set(rel, kind);
+    }
+}
 
 function getSyncSeconds() {
     const raw = Number(localStorage.getItem("horizon.fs.syncSec"));
@@ -332,6 +401,7 @@ function collectWebConfig() {
     return {
         minimap: localStorage.getItem("horizon.mod.xaerominimap") !== "false",
         worldmap: localStorage.getItem("horizon.mod.xaeroworldmap") !== "false",
+        litematica: localStorage.getItem("horizon.mod.litematica") === "true",
         syncSec: getSyncSeconds(),
     };
 }
@@ -344,25 +414,70 @@ function applyWebConfig(cfg) {
     if (typeof cfg.worldmap === "boolean") {
         localStorage.setItem("horizon.mod.xaeroworldmap", String(cfg.worldmap));
     }
+    if (typeof cfg.litematica === "boolean") {
+        localStorage.setItem("horizon.mod.litematica", String(cfg.litematica));
+    }
     if (typeof cfg.syncSec === "number" && cfg.syncSec >= 5) {
         localStorage.setItem("horizon.fs.syncSec", String(Math.round(cfg.syncSec)));
     }
     const cbMinimap = document.getElementById("mod-xaerominimap");
     const cbWorldmap = document.getElementById("mod-xaeroworldmap");
+    const cbLitematica = document.getElementById("mod-litematica");
     const syncInput = document.getElementById("file-sync-time");
     if (cbMinimap) cbMinimap.checked = localStorage.getItem("horizon.mod.xaerominimap") !== "false";
     if (cbWorldmap) cbWorldmap.checked = localStorage.getItem("horizon.mod.xaeroworldmap") !== "false";
+    if (cbLitematica) cbLitematica.checked = localStorage.getItem("horizon.mod.litematica") === "true";
     if (syncInput) syncInput.value = String(getSyncSeconds());
 }
 
-async function importFromExternalDir(extDir, root, glue, prefix = "") {
+async function readFromSavedRoot(root, rel) {
+    if (root instanceof IDBDatabase) {
+        const tx = root.transaction("files", "readonly");
+        const rec = await idbRequest(tx.objectStore("files").get(`/${rel}`));
+        return rec?.data ?? null;
+    }
+    const parts = rel.split("/").filter(Boolean);
+    const dir = await folder(root, parts.slice(0, -1), false);
+    if (!dir) return null;
+    try {
+        const fh = await dir.getFileHandle(parts.at(-1), { create: false });
+        const file = await fh.getFile();
+        return new Uint8Array(await file.arrayBuffer());
+    } catch (e) {
+        if (e.name === "NotFoundError") return null;
+        throw e;
+    }
+}
+
+async function importFromExternalDir(extDir, root, glue, prefix = "", remoteTombstones = null) {
+    if (!prefix && remoteTombstones === null) {
+        remoteTombstones = new Set(tombstones);
+        try {
+            const tfh = await extDir.getFileHandle(TOMBSTONE_FILE, { create: false });
+            const tfile = await tfh.getFile();
+            const arr = JSON.parse(await tfile.text());
+            if (Array.isArray(arr)) {
+                for (const item of arr) {
+                    const n = normRelPath(item);
+                    if (n) remoteTombstones.add(n);
+                }
+            }
+        } catch {
+            // no remote tombstone manifest
+        }
+    }
     let count = 0;
     for await (const [name, handle] of extDir.entries()) {
         const rel = prefix ? `${prefix}/${name}` : name;
+        if (rel === TOMBSTONE_FILE) continue;
+        if (rel !== WEB_CFG_FILE && (remoteTombstones?.has(rel) || isTombstoned(rel))) {
+            await extDir.removeEntry(name, { recursive: true }).catch(() => {});
+            continue;
+        }
         if (handle.kind === "directory") {
             if (root) await apply(root, rel, "dir", null);
             if (glue) glue.horizon_install_saved_dir(rel);
-            count += await importFromExternalDir(handle, root, glue, rel);
+            count += await importFromExternalDir(handle, root, glue, rel, remoteTombstones);
         } else {
             const file = await handle.getFile();
             const bytes = new Uint8Array(await file.arrayBuffer());
@@ -382,11 +497,12 @@ async function importFromExternalDir(extDir, root, glue, prefix = "") {
     return count;
 }
 
-async function exportOpfsToExternal(srcDir, dstDir) {
+async function exportOpfsToExternal(srcDir, dstDir, prefix = "") {
     for await (const [name, handle] of srcDir.entries()) {
+        const rel = prefix ? `${prefix}/${name}` : name;
         if (handle.kind === "directory") {
             const subDst = await dstDir.getDirectoryHandle(name, { create: true });
-            await exportOpfsToExternal(handle, subDst);
+            await exportOpfsToExternal(handle, subDst, rel);
         } else {
             const file = await handle.getFile();
             const fh = await dstDir.getFileHandle(name, { create: true });
@@ -395,6 +511,22 @@ async function exportOpfsToExternal(srcDir, dstDir) {
             await writable.close();
         }
     }
+    for await (const [name] of dstDir.entries()) {
+        const rel = prefix ? `${prefix}/${name}` : name;
+        if (rel === WEB_CFG_FILE || rel === TOMBSTONE_FILE) continue;
+        let exists = true;
+        try {
+            await srcDir.getFileHandle(name, { create: false }).catch(() => srcDir.getDirectoryHandle(name, { create: false }));
+        } catch {
+            exists = false;
+        }
+        if (!exists) {
+            await dstDir.removeEntry(name, { recursive: true }).catch(() => {});
+            tombstones.add(rel);
+            tombstonesDirty = true;
+        }
+    }
+    if (tombstonesDirty) saveLocalTombstones();
 }
 
 async function exportIdbToExternal(db, dstDir) {
@@ -413,22 +545,50 @@ async function syncToExternal(root, dirHandle) {
     externalSyncing = (async () => {
         const perm = await dirHandle.queryPermission({ mode: "readwrite" });
         if (perm !== "granted") return;
-        const extSave = await getSaveSubdir(dirHandle, true);
-        const cfgBytes = new TextEncoder().encode(JSON.stringify(collectWebConfig(), null, 2));
-        await apply(extSave, WEB_CFG_FILE, "file", cfgBytes);
-        if (root instanceof IDBDatabase) {
-            await exportIdbToExternal(root, extSave);
-        } else if (root) {
-            await exportOpfsToExternal(root, extSave);
+        if (!forceFullExternalSync && dirtyExternalOps.size === 0 && !configDirty && !tombstonesDirty) {
+            return;
         }
-        // Also export IndexedDB "horizon" if it exists alongside OPFS.
-        if (!(root instanceof IDBDatabase)) {
-            try {
-                const db = await idbOpen();
-                await exportIdbToExternal(db, extSave);
-            } catch {
-                // ignore if no idb
+        const extSave = await getSaveSubdir(dirHandle, true);
+        if (configDirty) {
+            const cfgBytes = new TextEncoder().encode(JSON.stringify(collectWebConfig(), null, 2));
+            await apply(extSave, WEB_CFG_FILE, "file", cfgBytes);
+            configDirty = false;
+        }
+        if (forceFullExternalSync) {
+            if (root instanceof IDBDatabase) {
+                await exportIdbToExternal(root, extSave);
+            } else if (root) {
+                await exportOpfsToExternal(root, extSave);
             }
+            dirtyExternalOps.clear();
+            forceFullExternalSync = false;
+        } else if (dirtyExternalOps.size > 0) {
+            const batch = [...dirtyExternalOps.entries()];
+            dirtyExternalOps.clear();
+            for (const [rel, kind] of batch) {
+                try {
+                    if (kind === "gone" || kind === "cleardir") {
+                        await apply(extSave, rel, kind, null);
+                    } else if (kind === "dir") {
+                        await apply(extSave, rel, "dir", null);
+                    } else if (root) {
+                        const bytes = await readFromSavedRoot(root, rel);
+                        if (bytes !== null) {
+                            await apply(extSave, rel, "file", bytes);
+                        } else {
+                            await apply(extSave, rel, "gone", null);
+                        }
+                    }
+                } catch (e) {
+                    dirtyExternalOps.set(rel, kind);
+                    console.warn(`Horizon: external sync failed for ${rel}:`, e);
+                }
+            }
+        }
+        if (tombstonesDirty) {
+            const tbBytes = new TextEncoder().encode(JSON.stringify([...tombstones]));
+            await apply(extSave, TOMBSTONE_FILE, "file", tbBytes);
+            tombstonesDirty = false;
         }
     })().finally(() => {
         externalSyncing = null;
@@ -519,6 +679,8 @@ async function connectFolderFlow(root, glue, msgEl, reloadOnImport = false) {
         }
         setMsg(msgEl, "Loaded successfully", false);
     } else {
+        forceFullExternalSync = true;
+        configDirty = true;
         await syncToExternal(root, handle);
         setMsg(msgEl, "Configured successfully", false);
         updateFilePanelUi("Configured successfully");
@@ -565,6 +727,8 @@ function promptFirstVisitOverlay(root, restoredHandle, initialMsg = "") {
                         setTimeout(() => location.reload(), 600);
                         return;
                     } else {
+                        forceFullExternalSync = true;
+                        configDirty = true;
                         await syncToExternal(root, currentRestored);
                         setMsg(msgEl, "Configured successfully", false);
                         updateFilePanelUi("Configured successfully");
@@ -615,6 +779,8 @@ async function prepareExternalStorage(root) {
                     await importFromExternalDir(extSave, root, null);
                     updateFilePanelUi("Loaded successfully");
                 } else {
+                    forceFullExternalSync = true;
+                    configDirty = true;
                     await syncToExternal(root, savedHandle);
                     updateFilePanelUi("Configured successfully");
                 }
@@ -665,8 +831,7 @@ async function main() {
             }
         });
         addEventListener("pagehide", () => {
-            saveChanges(glue, root);
-            syncToExternal(root, linkedDir);
+            saveChanges(glue, root).then(() => syncToExternal(root, linkedDir));
         });
     }
 
@@ -678,6 +843,7 @@ async function main() {
     const modCfg = JSON.stringify({
         minimap: localStorage.getItem("horizon.mod.xaerominimap") !== "false",
         worldmap: localStorage.getItem("horizon.mod.xaeroworldmap") !== "false",
+        litematica: localStorage.getItem("horizon.mod.litematica") === "true",
     });
     glue.horizon_install_saved_file(
         "config/xaero/mods_enabled.json",
@@ -715,12 +881,14 @@ function initModsPanel() {
     const filePanel = document.getElementById("file-panel");
     const cbMinimap = document.getElementById("mod-xaerominimap");
     const cbWorldmap = document.getElementById("mod-xaeroworldmap");
+    const cbLitematica = document.getElementById("mod-litematica");
     const note = document.getElementById("mods-note");
     const reloadBtn = document.getElementById("mods-reload");
-    if (!toggleBtn || !panel || !cbMinimap || !cbWorldmap) return;
+    if (!toggleBtn || !panel || !cbMinimap || !cbWorldmap || !cbLitematica) return;
 
     cbMinimap.checked = localStorage.getItem("horizon.mod.xaerominimap") !== "false";
     cbWorldmap.checked = localStorage.getItem("horizon.mod.xaeroworldmap") !== "false";
+    cbLitematica.checked = localStorage.getItem("horizon.mod.litematica") === "true";
 
     toggleBtn.addEventListener("click", () => {
         const open = panel.classList.toggle("open");
@@ -731,12 +899,15 @@ function initModsPanel() {
     const onToggle = () => {
         localStorage.setItem("horizon.mod.xaerominimap", String(cbMinimap.checked));
         localStorage.setItem("horizon.mod.xaeroworldmap", String(cbWorldmap.checked));
+        localStorage.setItem("horizon.mod.litematica", String(cbLitematica.checked));
+        configDirty = true;
         if (note) note.style.display = "block";
         if (reloadBtn) reloadBtn.style.display = "block";
     };
 
     cbMinimap.addEventListener("change", onToggle);
     cbWorldmap.addEventListener("change", onToggle);
+    cbLitematica.addEventListener("change", onToggle);
     if (reloadBtn) {
         reloadBtn.addEventListener("click", () => location.reload());
     }
@@ -766,6 +937,7 @@ function initFilePanel() {
             const val = Math.max(5, Math.round(Number(syncInput.value) || 30));
             syncInput.value = String(val);
             localStorage.setItem("horizon.fs.syncSec", String(val));
+            configDirty = true;
             restartExternalSyncTimer();
             updateFilePanelUi(`Sync interval set to ${val}s`);
         });
@@ -801,6 +973,7 @@ function initFilePanel() {
             if (!linkedDir || !activeRoot) return;
             try {
                 if (activeGlue) await saveChanges(activeGlue, activeRoot);
+                configDirty = true;
                 await syncToExternal(activeRoot, linkedDir);
                 updateFilePanelUi(`Synced (${new Date().toLocaleTimeString()})`);
             } catch (e) {
